@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import type { GameMode } from "./MenuScene";
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -12,6 +13,12 @@ const BALL_SPEED_INCREMENT = 25;
 const MAX_BOUNCE_ANGLE = Math.PI / 3;
 const WIN_SCORE = 5;
 const MAX_DT_MS = 33;
+
+const AI_SPEED = 360;
+const AI_DEADZONE = 6;
+const AI_RETHINK_MS = 250;
+const AI_AIM_ERROR = 18;
+const AI_REST_TARGET = HEIGHT / 2;
 
 type GameState = "serving" | "playing" | "gameover";
 type Side = "left" | "right";
@@ -31,6 +38,11 @@ export class PongScene extends Phaser.Scene {
   private rightScore = 0;
   private state: GameState = "serving";
   private serveDirection: 1 | -1 = 1;
+  private mode: GameMode = "multi";
+
+  private aiTargetY = AI_REST_TARGET;
+  private aiAimError = 0;
+  private aiNextRethinkAt = 0;
 
   private keys!: {
     W: Phaser.Input.Keyboard.Key;
@@ -39,10 +51,25 @@ export class PongScene extends Phaser.Scene {
     DOWN: Phaser.Input.Keyboard.Key;
     SPACE: Phaser.Input.Keyboard.Key;
     R: Phaser.Input.Keyboard.Key;
+    ESC: Phaser.Input.Keyboard.Key;
   };
 
   constructor() {
     super("pong");
+  }
+
+  init(data: { mode?: GameMode }) {
+    this.mode = data.mode ?? "multi";
+    this.leftScore = 0;
+    this.rightScore = 0;
+    this.ballSpeed = BALL_SPEED_START;
+    this.ballVx = 0;
+    this.ballVy = 0;
+    this.state = "serving";
+    this.serveDirection = 1;
+    this.aiTargetY = AI_REST_TARGET;
+    this.aiAimError = 0;
+    this.aiNextRethinkAt = 0;
   }
 
   create() {
@@ -59,7 +86,7 @@ export class PongScene extends Phaser.Scene {
     this.rightScoreText = this.add.text(WIDTH / 2 + 60, 30, "0", scoreStyle).setOrigin(0, 0);
 
     this.messageText = this.add
-      .text(WIDTH / 2, HEIGHT - 40, "ESPAÇO para sacar  •  W/S esquerda  •  ↑/↓ direita", {
+      .text(WIDTH / 2, HEIGHT - 40, this.helpText(), {
         fontFamily: "monospace",
         fontSize: "14px",
         color: "#94a3b8",
@@ -74,13 +101,24 @@ export class PongScene extends Phaser.Scene {
       DOWN: kb.addKey(Phaser.Input.Keyboard.KeyCodes.DOWN),
       SPACE: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
       R: kb.addKey(Phaser.Input.Keyboard.KeyCodes.R),
+      ESC: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ESC),
     };
   }
 
-  update(_time: number, delta: number) {
+  update(time: number, delta: number) {
+    if (Phaser.Input.Keyboard.JustDown(this.keys.ESC)) {
+      this.scene.start("menu");
+      return;
+    }
+
     const dt = Math.min(delta, MAX_DT_MS) / 1000;
 
-    this.updatePaddles(dt);
+    this.updateLeftPaddle(dt);
+    if (this.mode === "single") {
+      this.updateRightPaddleAI(time, dt);
+    } else {
+      this.updateRightPaddleHuman(dt);
+    }
 
     if (this.state === "serving" && Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) {
       this.serve();
@@ -91,16 +129,67 @@ export class PongScene extends Phaser.Scene {
     }
   }
 
-  private updatePaddles(dt: number) {
-    const half = PADDLE_H / 2;
+  private helpText(): string {
+    if (this.mode === "single") {
+      return "W/S esquerda  •  CPU à direita  •  ESPAÇO sacar  •  ESC menu";
+    }
+    return "W/S esquerda  •  ↑/↓ direita  •  ESPAÇO sacar  •  ESC menu";
+  }
 
+  private updateLeftPaddle(dt: number) {
+    const half = PADDLE_H / 2;
     if (this.keys.W.isDown) this.leftPaddle.y -= PADDLE_SPEED * dt;
     if (this.keys.S.isDown) this.leftPaddle.y += PADDLE_SPEED * dt;
+    this.leftPaddle.y = Phaser.Math.Clamp(this.leftPaddle.y, half, HEIGHT - half);
+  }
+
+  private updateRightPaddleHuman(dt: number) {
+    const half = PADDLE_H / 2;
     if (this.keys.UP.isDown) this.rightPaddle.y -= PADDLE_SPEED * dt;
     if (this.keys.DOWN.isDown) this.rightPaddle.y += PADDLE_SPEED * dt;
-
-    this.leftPaddle.y = Phaser.Math.Clamp(this.leftPaddle.y, half, HEIGHT - half);
     this.rightPaddle.y = Phaser.Math.Clamp(this.rightPaddle.y, half, HEIGHT - half);
+  }
+
+  private updateRightPaddleAI(time: number, dt: number) {
+    if (time >= this.aiNextRethinkAt) {
+      if (this.state === "playing" && this.ballVx > 0) {
+        this.aiTargetY = this.predictBallYAtRightPaddle();
+        this.aiAimError = Phaser.Math.FloatBetween(-AI_AIM_ERROR, AI_AIM_ERROR);
+      } else {
+        this.aiTargetY = AI_REST_TARGET;
+        this.aiAimError = 0;
+      }
+      this.aiNextRethinkAt = time + AI_RETHINK_MS;
+    }
+
+    const target = this.aiTargetY + this.aiAimError;
+    const diff = target - this.rightPaddle.y;
+
+    if (Math.abs(diff) > AI_DEADZONE) {
+      const direction = Math.sign(diff);
+      this.rightPaddle.y += direction * AI_SPEED * dt;
+    }
+
+    const half = PADDLE_H / 2;
+    this.rightPaddle.y = Phaser.Math.Clamp(this.rightPaddle.y, half, HEIGHT - half);
+  }
+
+  private predictBallYAtRightPaddle(): number {
+    const targetX = this.rightPaddle.x - PADDLE_W / 2 - BALL_SIZE / 2;
+    const dx = targetX - this.ball.x;
+    if (dx <= 0 || this.ballVx <= 0) return this.ball.y;
+
+    const t = dx / this.ballVx;
+    const naiveY = this.ball.y + this.ballVy * t;
+
+    const halfBall = BALL_SIZE / 2;
+    const minY = halfBall;
+    const maxY = HEIGHT - halfBall;
+    const range = maxY - minY;
+
+    let rel = ((naiveY - minY) % (2 * range) + 2 * range) % (2 * range);
+    if (rel > range) rel = 2 * range - rel;
+    return minY + rel;
   }
 
   private updateBall(dt: number) {
@@ -148,6 +237,8 @@ export class PongScene extends Phaser.Scene {
     const halfP = PADDLE_W / 2;
     const halfB = BALL_SIZE / 2;
     this.ball.x = xDirection === 1 ? paddle.x + halfP + halfB : paddle.x - halfP - halfB;
+
+    this.aiNextRethinkAt = 0;
   }
 
   private scorePoint(scoringSide: Side) {
@@ -171,7 +262,7 @@ export class PongScene extends Phaser.Scene {
     this.ballSpeed = BALL_SPEED_START;
     this.serveDirection = nextServeDirection;
     this.state = "serving";
-    this.messageText.setText("ESPAÇO para sacar");
+    this.messageText.setText("ESPAÇO para sacar  •  ESC menu");
   }
 
   private serve() {
@@ -180,14 +271,20 @@ export class PongScene extends Phaser.Scene {
     this.ballVy = this.ballSpeed * Math.sin(angle);
     this.state = "playing";
     this.messageText.setText("");
+    this.aiNextRethinkAt = 0;
   }
 
   private endMatch() {
     this.state = "gameover";
     this.ballVx = 0;
     this.ballVy = 0;
-    const winner = this.leftScore >= WIN_SCORE ? "ESQUERDA" : "DIREITA";
-    this.messageText.setText(`${winner} venceu  •  R para reiniciar`);
+    const winner = this.winnerLabel();
+    this.messageText.setText(`${winner} venceu  •  R para reiniciar  •  ESC menu`);
+  }
+
+  private winnerLabel(): string {
+    if (this.leftScore >= WIN_SCORE) return this.mode === "single" ? "VOCÊ" : "ESQUERDA";
+    return this.mode === "single" ? "COMPUTADOR" : "DIREITA";
   }
 
   private resetMatch() {

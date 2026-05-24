@@ -1,12 +1,14 @@
 # 02 — Pong
 
-Pong de 2 jogadores locais. Primeiro à frente em **5 pontos** ganha.
+Pong com **menu inicial** (1 jogador vs CPU, ou 2 jogadores locais). Primeiro a **5 pontos** vence.
 
 **Controles:**
+- Menu: `↑`/`↓` ou `W`/`S` para navegar, `ENTER` ou `ESPAÇO` para escolher
 - Esquerda: `W` / `S`
-- Direita: `↑` / `↓`
+- Direita: `↑` / `↓` (no modo 2P)
 - Sacar: `ESPAÇO`
 - Reiniciar (após game over): `R`
+- Voltar ao menu: `ESC`
 
 **Stack:** TypeScript + Phaser 3 + Vite.
 
@@ -17,129 +19,142 @@ npm install
 npm run dev
 ```
 
-Abre em `http://localhost:5174` (escolhi porta diferente do projeto #01 pra você poder rodar os dois ao mesmo tempo).
+Abre em `http://localhost:5174`.
 
-## O que tem de novo aqui (vs #01)
-
-### 1. Código em múltiplos arquivos
+## Estrutura
 
 ```
 src/
-├── main.ts            ← config do jogo + instância Phaser.Game
+├── main.ts                  # registra as cenas
 └── scenes/
-    └── PongScene.ts   ← a cena com toda a lógica
+    ├── MenuScene.ts         # tela inicial com seleção de modo
+    └── PongScene.ts         # partida em si (humano vs humano OU vs CPU)
 ```
 
-`main.ts` virou só um "ponto de entrada". A cena é uma classe exportada de outro arquivo. **Esse padrão escala** — em jogos maiores você tem `MenuScene`, `GameScene`, `HUDScene`, cada uma no seu arquivo.
+## Conceitos novos (vs versão anterior do Pong)
 
-### 2. Máquina de estados de partida
+### 1. Múltiplas cenas + transição
+
+Phaser permite registrar várias cenas no `Phaser.Game`:
 
 ```ts
-type GameState = "serving" | "playing" | "gameover";
-private state: GameState = "serving";
+new Phaser.Game({ scene: [MenuScene, PongScene] });
 ```
 
-Em vez de variáveis booleanas espalhadas (`isPlaying`, `isWaiting`, `isOver`), uma única string com **valores válidos garantidos pelo TypeScript**. O `update` decide o que fazer:
+A primeira do array é a inicial. Para trocar:
 
 ```ts
-if (this.state === "serving" && JustDown(SPACE)) this.serve();
-else if (this.state === "gameover" && JustDown(R)) this.resetMatch();
-else if (this.state === "playing") this.updateBall(dt);
+this.scene.start("pong");           // sai da atual, entra na "pong"
+this.scene.start("pong", { mode }); // mesmo, passando dados
 ```
 
-State machine é **o padrão** pra gerenciar fases do jogo. No Asteroids (#05) vou usar essa ideia em escala maior.
+A scene `key` (string passada no `super("pong")` do constructor) é o identificador.
 
-### 3. Colisão AABB (Axis-Aligned Bounding Box) na mão
+### 2. Comunicação entre cenas — o método `init`
 
-Não usei o sistema de física do Phaser propositalmente — quero que você veja a matemática crua. Dois retângulos colidem quando:
+Phaser chama `init(data)` **antes** de `create()`, com o objeto que você passou em `scene.start`. É o lugar ideal pra ler parâmetros e resetar estado:
 
 ```ts
-Math.abs(a.x - b.x) < (a.width + b.width) / 2 &&
-Math.abs(a.y - b.y) < (a.height + b.height) / 2
+init(data: { mode?: GameMode }) {
+  this.mode = data.mode ?? "multi";
+  this.leftScore = 0;
+  // ...
+}
 ```
 
-**Por que funciona:** se o centro de `a` está a menos da metade da soma das larguras horizontalmente, eles se sobrepõem no eixo X. Mesmo no eixo Y. As duas condições → sobreposição.
+**Por que `init` e não `create`?** Porque cenas **podem ser reiniciadas** (ex: você joga, vai pro menu, volta a jogar). O estado de campos da classe persiste entre execuções. `init` é onde você zera tudo. `create` cria os GameObjects do zero (eles são destruídos quando a cena sai).
 
-É chamado "AABB" porque assume que os retângulos **não rotacionam**. Para retângulos rotacionados (carros, naves girando), usa-se SAT (Separating Axis Theorem) — bem mais complexo. Nesse caso, deixe para um engine de física resolver.
+### 3. AI rule-based — três regras simples
 
-### 4. Ângulo de rebote baseado na posição de impacto
+A CPU não usa machine learning. São três regras combinadas que produzem comportamento "bom o suficiente":
 
-Pong sem isso é tedioso (a bola só inverte). O truque clássico:
+**Regra 1: Previsão analítica de trajetória**
+
+Quando a bola vai em direção à paddle direita (`ballVx > 0`), calculo matematicamente onde ela vai chegar:
 
 ```ts
-const offset = (this.ball.y - paddle.y) / (PADDLE_H / 2);  // -1 (topo) a +1 (base)
-const angle = offset * MAX_BOUNCE_ANGLE;                   // até ±60°
-
-this.ballVx = direction * speed * Math.cos(angle);
-this.ballVy = speed * Math.sin(angle);
+const t = dx / ballVx;                       // tempo até chegar no x do paddle
+const naiveY = ball.y + ballVy * t;          // y se não houvesse paredes
+// reflete naiveY no intervalo válido usando "triangle wave"
 ```
 
-**Bate no topo do paddle** → ângulo pra cima. **Bate no centro** → reto. **Bate na base** → ângulo pra baixo. Isso dá *controle estratégico* ao jogador — você "mira" com a posição do paddle. É a diferença entre Pong genérico e Pong divertido.
+**O "triangle wave" mata os ricochetes em uma fórmula só.** Em vez de simular cada ricochete num loop, uso uma identidade matemática: reflexão entre duas paredes paralelas é equivalente a tomar o módulo do deslocamento por `2 × altura` e dobrar quando passa de `altura`. Vê em `predictBallYAtRightPaddle()`. Isso é **O(1)** em vez de O(n_ricochetes).
 
-### 5. Aceleração progressiva da bola
+**Regra 2: Descanso quando bola se afasta**
+
+Quando a bola vai pro outro lado (`ballVx < 0`), o paddle drifta suavemente pro centro. Isso é importante: sem isso, a CPU fica parada onde rebateu por último, vulnerável à próxima jogada.
+
+**Regra 3: Imperfeição**
+
+Três fontes de erro tornam a CPU **batível**:
+- **Erro de mira aleatório** (`±18 px`) recalculado a cada "re-pensada".
+- **Velocidade ligeiramente menor** que humana (360 vs 420 px/s).
+- **Intervalo de re-pensar de 250ms**: a CPU não reage instantaneamente a cada frame. Ela "olha", decide, e mantém a decisão por 250ms.
+- **Deadzone de 6px**: se o paddle está perto do alvo, fica parado. Evita oscilação ("jitter") em torno do alvo.
+
+Sem essas imperfeições, a previsão é matematicamente perfeita → CPU **nunca erra** → jogo chato. **Boas IAs de jogo são deliberadamente piores que o ótimo.**
+
+### 4. State menu navigation pattern
+
+Padrão clássico de menu:
 
 ```ts
-this.ballSpeed += BALL_SPEED_INCREMENT;
+private selectedIndex = 0;
+
+update() {
+  if (justDown(UP))    selectedIndex = (selectedIndex - 1 + N) % N;
+  if (justDown(DOWN))  selectedIndex = (selectedIndex + 1) % N;
+  if (justDown(ENTER)) executeOption(selectedIndex);
+  refreshHighlight();
+}
 ```
 
-A cada rebatida em paddle, a bola fica 25 px/s mais rápida. Resseta a cada ponto. Mantém a partida tensa em vez de monótona.
+O `+ N` antes do `% N` no UP é por causa do JavaScript: `-1 % 3 === -1`, não `2`. Adicionar `N` antes garante o módulo positivo.
 
-### 6. "Nudge" pra fora do paddle após colisão
+### 5. Re-renderização do menu visual
 
-Depois de detectar a colisão e inverter a velocidade, eu **reposiciono a bola** logo fora do paddle:
+Ao mudar a seleção, eu **rescrevo o texto** de cada opção (com/sem o `▶`) e troco a cor. Alternativa seria criar um único `Phaser.GameObjects.Triangle` que se move pra cima/baixo. Reescrever texto é mais simples; mover seria mais "polido". Pra menu pequeno, qualquer abordagem serve.
 
-```ts
-this.ball.x = direction === 1 ? paddle.x + halfP + halfB : paddle.x - halfP - halfB;
-```
+### 6. Resetar o `aiNextRethinkAt` em momentos-chave
 
-Por quê? Se eu só inverter `vx` e a bola estiver *dentro* do paddle naquele frame, no frame seguinte ela ainda está dentro → detecto colisão de novo → inverto de novo → fica grudada. Esse é o **bug da "bola fritando" no paddle**. A correção: garantir que a bola saia do paddle no mesmo frame.
+Reparou no `this.aiNextRethinkAt = 0` dentro de `bounceOffPaddle` e `serve`? Isso **força a CPU a re-pensar imediatamente** quando a bola muda de direção. Sem isso, a CPU ficava com 250ms de delay reagindo a um saque — vai pro lado errado.
 
-### 7. Cap no `dt` para evitar tunneling
+Lição: máquinas de estado de timing em IA precisam de **gatilhos de invalidação**. Aprende-se isso sofrendo com AIs que reagem tarde.
 
-```ts
-const dt = Math.min(delta, MAX_DT_MS) / 1000;  // limita a 33ms (~30 FPS pior caso)
-```
+## Por que CPU não é "AI" de verdade
 
-Lembra do que falei no #01? Se um frame demorar 100ms (você arrastou a janela, abriu o devtools), a bola se move `400 px/s × 0.1s = 40 px` num único frame — pode pular por cima do paddle sem registrar. Limitando o `dt`, no pior caso a bola anda menos e a colisão pega. O jogo "engasga" visualmente, mas **continua jogável** em vez de bugar.
+Você pediu **regras pré-definidas, sem AI** — e foi exatamente o que fiz. Vale entender a distinção:
 
-### 8. `JustDown` vs `isDown`
+| | Rule-based (o que fiz) | Machine Learning |
+|---|---|---|
+| Como decide | If/else baseado em estado atual | Modelo treinado em dados |
+| Como evolui | Você muda o código | Retreina o modelo |
+| Comportamento | Determinístico (mesma entrada → mesma saída) | Probabilístico |
+| Custo de runtime | Quase zero | Inferência custa CPU/RAM |
+| Boa para | Quase todo jogo até hoje | Casos onde regras explodem em complexidade |
 
-- `key.isDown` — true enquanto a tecla está pressionada (polling contínuo).
-- `Phaser.Input.Keyboard.JustDown(key)` — true **só no frame em que a tecla foi pressionada**.
+99% dos jogos AAA usam **rule-based + behavior trees + finite state machines**. ML em jogos ainda é raro fora de pesquisa (AlphaStar, OpenAI Five, MarI/O). Não se preocupa com "AI de verdade" — saber projetar bons sistemas de regras é o que importa.
 
-Pra movimento contínuo (paddle subindo enquanto seguro W) → `isDown`.
-Pra ação única (sacar, reiniciar, pular) → `JustDown`. Se eu usasse `isDown` no SPACE, segurar a tecla daria múltiplos saques no mesmo serve.
-
-### 9. `setOrigin(x, y)` em texto
-
-```ts
-this.add.text(...).setOrigin(1, 0);   // âncora no canto superior direito
-this.add.text(...).setOrigin(0.5);    // âncora no centro
-```
-
-O **origin** é o ponto do objeto que fica em `(x, y)`. Padrão é `(0.5, 0.5)` para shapes e `(0, 0)` para texto. Usei `(1, 0)` no score esquerdo pra alinhá-lo à direita do número (assim "0" e "10" ficam alinhados no mesmo lugar, em vez de "0" deslocando quando vira "10").
-
-## Conceitos novos consolidados
+## Conceitos consolidados
 
 | Conceito | Aplicação |
 |----------|-----------|
-| Organização em módulos | `scenes/` separado de `main.ts` |
-| State machine | `serving` / `playing` / `gameover` |
-| AABB collision | `intersects(a, b)` |
-| `JustDown` vs `isDown` | Ação única vs contínua |
-| Reflexão com ângulo | Rebote estratégico no paddle |
-| Tunneling e cap de dt | Robustez do game loop |
-| Resolution de penetração | "Nudge" pós-colisão |
-| `setOrigin` | Alinhamento de texto/objetos |
+| Múltiplas cenas | `MenuScene` + `PongScene` |
+| `init(data)` | Recebe `mode` do menu, zera estado |
+| Predição analítica | Cálculo fechado de onde a bola cai |
+| Triangle wave reflection | Reflexão O(1) entre paredes paralelas |
+| AI rule-based | Predição + descanso + imperfeição |
+| Imperfeição deliberada | Velocidade, mira, latência, deadzone |
+| Gatilho de invalidação | Reset do `aiNextRethinkAt` em eventos-chave |
 
 ## Desafios para evoluir
 
-1. **CPU oponente:** substituir a paddle direita por uma IA que segue a bola (com `lerp` pra ela errar às vezes — IA perfeita não é divertida).
-2. **Efeitos de impacto:** pequeno "screen shake" quando a bola bate em paddle (`this.cameras.main.shake(80, 0.005)`).
-3. **Power-ups:** spawn periódico de um quadrado colorido no centro; pegou → próximo saque, sua paddle dobra de tamanho por 5 segundos.
-4. **Áudio:** beep curto no rebote em paddle, beep diferente no ponto. Pode gerar tom com `AudioContext` puro ou carregar um `.wav`.
-5. **Menu inicial:** uma cena `MenuScene` com "PONG" gigante e "ESPAÇO pra começar", antes do `PongScene`.
+1. **Dificuldade variável:** adicionar uma terceira opção no menu (Fácil / Médio / Difícil), variando `AI_SPEED`, `AI_AIM_ERROR` e `AI_RETHINK_MS`.
+2. **CPU vs CPU:** quarta opção "Auto" — ambos os paddles com IA. Bom pra testar balanceamento (a partida deveria oscilar, não terminar 5x0 sempre).
+3. **Pausa:** tecla `P` durante a partida congela tudo, mostra overlay "PAUSADO".
+4. **Histórico no menu:** persistir em `localStorage` quantas vitórias você teve vs CPU, mostrar no menu.
+5. **Saque automático:** depois de 3 segundos no estado `serving`, sacar sozinho. Útil pra modo CPU vs CPU.
 
 ## Próximo
 
-[03 — Snake](../03-snake/) (a criar): lógica em grid, spawn aleatório de comida, crescimento da cobra, persistência de high score em `localStorage`.
+[03 — Snake](../03-snake/) (a criar): grid lógico, comida aleatória, crescimento, high score em `localStorage`.
