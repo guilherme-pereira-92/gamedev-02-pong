@@ -1,71 +1,89 @@
 import Phaser from "phaser";
+import { COLORS, COLOR_HEX, TEXT_PRESETS } from "../theme";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel } from "../ui";
+import { takeScreenshot } from "../screenshot";
+import { unlockAudio } from "../audio";
 
 const WIDTH = 800;
 const HEIGHT = 600;
+const CAMPAIGN_PHASE_KEY = "gamedev-02-pong-campaign-phase";
 
-export type GameMode = "single" | "multi";
+export type GameMode = "campaign" | "twoplayer" | "training";
+export type AiDifficulty = "easy" | "normal" | "hard";
 
-type MenuOption = { label: string; mode: GameMode };
+interface MenuOption {
+  label: string;
+  description: string;
+  mode: GameMode;
+  difficulty?: AiDifficulty;
+}
 
 const OPTIONS: MenuOption[] = [
-  { label: "1 Jogador  (vs Computador)", mode: "single" },
-  { label: "2 Jogadores  (Local)", mode: "multi" },
+  { label: "CAMPANHA",              description: "5 fases vs CPU com mecânicas que mudam",   mode: "campaign" },
+  { label: "2 JOGADORES (LOCAL)",   description: "primeiro a 5 pontos vence",                  mode: "twoplayer" },
+  { label: "TREINO · FÁCIL",         description: "vs CPU lenta, sem twists",                   mode: "training", difficulty: "easy" },
+  { label: "TREINO · NORMAL",        description: "vs CPU padrão",                              mode: "training", difficulty: "normal" },
+  { label: "TREINO · DIFÍCIL",       description: "vs CPU rápida com pouca margem de erro",     mode: "training", difficulty: "hard" },
 ];
 
 export class MenuScene extends Phaser.Scene {
   private selectedIndex = 0;
   private optionTexts: Phaser.GameObjects.Text[] = [];
-  private keys!: {
-    UP: Phaser.Input.Keyboard.Key;
-    DOWN: Phaser.Input.Keyboard.Key;
-    W: Phaser.Input.Keyboard.Key;
-    S: Phaser.Input.Keyboard.Key;
-    ENTER: Phaser.Input.Keyboard.Key;
-    SPACE: Phaser.Input.Keyboard.Key;
-  };
+  private optionDescTexts: Phaser.GameObjects.Text[] = [];
+  private campaignPhase = 1;
+
+  private keys!: Record<
+    "UP" | "DOWN" | "W" | "S" | "ENTER" | "SPACE" | "K",
+    Phaser.Input.Keyboard.Key
+  >;
 
   constructor() {
     super("menu");
   }
 
   create() {
-    for (let y = 10; y < HEIGHT; y += 20) {
-      this.add.rectangle(WIDTH / 2, y, 2, 10, 0x1e293b);
-    }
+    this.campaignPhase = this.loadCampaignPhase();
+
+    this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, COLOR_HEX.bg);
+    drawDiagonalScanlines(this, WIDTH, HEIGHT, 15, 0.045);
+
+    addCornerLabel(this, 22, 22, "/ 02", "PONG", false);
+    createPulsingDot(this, WIDTH - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
+    this.add
+      .text(WIDTH - 38, 22, `CAMPANHA · FASE ${String(this.campaignPhase).padStart(2, "0")} / 05`, TEXT_PRESETS.monoLabel)
+      .setOrigin(1, 0);
+
+    this.add.text(22, HEIGHT - 22, "GAMEDEV.02", TEXT_PRESETS.hint).setOrigin(0, 1);
+    this.add.text(WIDTH - 22, HEIGHT - 22, "BRICOLAGE · GEIST", TEXT_PRESETS.hint).setOrigin(1, 1);
 
     this.add
-      .text(WIDTH / 2, 130, "PONG", {
-        fontFamily: "monospace",
-        fontSize: "112px",
-        color: "#ffffff",
-      })
+      .text(WIDTH / 2, 110, "/ JORNADA GAMEDEV", { ...TEXT_PRESETS.monoLabel, color: COLORS.muted })
       .setOrigin(0.5);
 
     this.add
-      .text(WIDTH / 2, 215, "uma jornada em game dev", {
-        fontFamily: "monospace",
-        fontSize: "14px",
-        color: "#475569",
-      })
+      .text(WIDTH / 2, 168, "PONG", TEXT_PRESETS.heroOutline)
+      .setOrigin(0.5)
+      .setFontSize("96px");
+
+    this.add
+      .text(WIDTH / 2, 232, "rebata, mire, leve o ponto", TEXT_PRESETS.body)
       .setOrigin(0.5);
 
     OPTIONS.forEach((opt, i) => {
-      const text = this.add
-        .text(WIDTH / 2, 320 + i * 56, opt.label, {
-          fontFamily: "monospace",
-          fontSize: "22px",
-          color: "#64748b",
-        })
+      const y = 295 + i * 52;
+      const labelText = this.add
+        .text(WIDTH / 2, y, opt.label, { ...TEXT_PRESETS.bodyFg, fontSize: "19px" })
         .setOrigin(0.5);
-      this.optionTexts.push(text);
+      this.optionTexts.push(labelText);
+
+      const descText = this.add
+        .text(WIDTH / 2, y + 18, opt.description, { ...TEXT_PRESETS.hint, color: COLORS.muted })
+        .setOrigin(0.5);
+      this.optionDescTexts.push(descText);
     });
 
     this.add
-      .text(WIDTH / 2, HEIGHT - 50, "↑/↓ ou W/S para escolher    ENTER ou ESPAÇO para jogar", {
-        fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#475569",
-      })
+      .text(WIDTH / 2, HEIGHT - 56, "↑ ↓ ESCOLHER  ·  ENTER JOGAR  ·  K SCREENSHOT", TEXT_PRESETS.hint)
       .setOrigin(0.5);
 
     const kb = this.input.keyboard!;
@@ -76,13 +94,19 @@ export class MenuScene extends Phaser.Scene {
       S: kb.addKey(Phaser.Input.Keyboard.KeyCodes.S),
       ENTER: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER),
       SPACE: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
+      K: kb.addKey(Phaser.Input.Keyboard.KeyCodes.K),
     };
+    kb.on("keydown", unlockAudio);
 
     this.refreshHighlight();
   }
 
   update() {
     const justDown = Phaser.Input.Keyboard.JustDown;
+
+    if (justDown(this.keys.K)) {
+      takeScreenshot(this.game, "gamedev-02-pong-menu");
+    }
 
     if (justDown(this.keys.UP) || justDown(this.keys.W)) {
       this.selectedIndex = (this.selectedIndex - 1 + OPTIONS.length) % OPTIONS.length;
@@ -91,15 +115,36 @@ export class MenuScene extends Phaser.Scene {
       this.selectedIndex = (this.selectedIndex + 1) % OPTIONS.length;
       this.refreshHighlight();
     } else if (justDown(this.keys.ENTER) || justDown(this.keys.SPACE)) {
-      this.scene.start("pong", { mode: OPTIONS[this.selectedIndex].mode });
+      const opt = OPTIONS[this.selectedIndex];
+      this.scene.start("pong", {
+        mode: opt.mode,
+        difficulty: opt.difficulty,
+        phase: opt.mode === "campaign" ? this.campaignPhase : 1,
+      });
     }
   }
 
   private refreshHighlight() {
     this.optionTexts.forEach((text, i) => {
       const isSelected = i === this.selectedIndex;
-      text.setColor(isSelected ? "#ffffff" : "#64748b");
-      text.setText(`${isSelected ? "▶  " : "    "}${OPTIONS[i].label}`);
+      text.setColor(isSelected ? COLORS.accent : COLORS.fg);
+      text.setText(`${isSelected ? "▸  " : "    "}${OPTIONS[i].label}`);
+    });
+    this.optionDescTexts.forEach((text, i) => {
+      const isSelected = i === this.selectedIndex;
+      text.setColor(isSelected ? COLORS.fg : COLORS.muted);
     });
   }
+
+  private loadCampaignPhase(): number {
+    try {
+      const raw = localStorage.getItem(CAMPAIGN_PHASE_KEY);
+      const n = raw ? parseInt(raw, 10) : 1;
+      return Number.isFinite(n) && n >= 1 && n <= 5 ? n : 1;
+    } catch {
+      return 1;
+    }
+  }
 }
+
+export { CAMPAIGN_PHASE_KEY };
