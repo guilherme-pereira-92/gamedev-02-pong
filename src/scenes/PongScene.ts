@@ -3,6 +3,7 @@ import { COLOR_HEX, TEXT_PRESETS } from "../theme";
 import { drawDiagonalScanlines, createPulsingDot, addCornerLabel } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { playTone } from "../audio";
+import { isTouchDevice } from "../input";
 import { CAMPAIGN_PHASE_KEY, type AiDifficulty, type GameMode } from "./MenuScene";
 
 const WIDTH = 800;
@@ -182,6 +183,30 @@ export class PongScene extends Phaser.Scene {
     };
 
     this.showServingOverlay();
+
+    // Touch: drag vertical em cada metade move o paddle correspondente.
+    this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.isDown) return;
+      this.handlePointerMove(pointer);
+    });
+    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.handlePointerMove(pointer);
+      if (this.state === "serving") this.serve();
+      else if (this.state === "gameover") this.restartMatch();
+      else if (this.state === "phasecleared") {
+        this.scene.start("pong", { mode: "campaign", phase: this.phase + 1 });
+      } else if (this.state === "campaigncomplete") this.scene.start("menu");
+    });
+  }
+
+  private handlePointerMove(pointer: Phaser.Input.Pointer) {
+    const half = this.rules.paddleH / 2;
+    const clampedY = Phaser.Math.Clamp(pointer.y, half, HEIGHT - half);
+    if (pointer.x < WIDTH / 2) {
+      this.leftPaddle.y = clampedY;
+    } else if (this.mode === "twoplayer") {
+      this.rightPaddle.y = clampedY;
+    }
   }
 
   private drawCenterLine() {
@@ -199,6 +224,11 @@ export class PongScene extends Phaser.Scene {
   }
 
   private controlsHint(): string {
+    if (isTouchDevice()) {
+      return this.mode === "twoplayer"
+        ? "ARRASTE METADE ESQ/DIR · TOQUE PRA SACAR"
+        : "ARRASTE PRA MOVER · TOQUE PRA SACAR";
+    }
     if (this.mode === "twoplayer") return "W/S · ↑/↓ · ESPAÇO SACAR · ESC MENU · K SCREENSHOT";
     return "W/S · CPU À DIREITA · ESPAÇO SACAR · ESC MENU · K";
   }
