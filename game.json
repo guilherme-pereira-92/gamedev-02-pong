@@ -19,5 +19,5 @@
   "repo": "https://github.com/guilherme-pereira-92/gamedev-02-pong",
   "cover": "screenshots/cover.png",
   "playable": true,
-  "mobile": "letterbox"
+  "mobile": "responsive"
 }
