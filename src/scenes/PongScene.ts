@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { COLOR_HEX, TEXT_PRESETS } from "../theme";
-import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, setupResponsiveCameras } from "../ui";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, setupResponsiveCameras, getResponsiveTextSize } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { playTone } from "../audio";
 import { isTouchDevice } from "../input";
@@ -164,13 +164,13 @@ export class PongScene extends Phaser.Scene {
     const bottomRight = this.add.text(this.scale.width - 22, this.scale.height - 22, this.controlsHint(), TEXT_PRESETS.hint).setOrigin(1, 1); registerUi(bottomRight);
 
     // score grande no topo central
-    const scoreStyle = { ...TEXT_PRESETS.heroOutline, fontSize: "72px" };
+    const scoreStyle = { ...TEXT_PRESETS.heroOutline, fontSize: getResponsiveTextSize(this, "display") };
     this.leftScoreText = this.add.text(this.scale.width / 2 - 60, 50, "0", scoreStyle).setOrigin(1, 0); registerUi(this.leftScoreText);
     this.rightScoreText = this.add.text(this.scale.width / 2 + 60, 50, "0", scoreStyle).setOrigin(0, 0); registerUi(this.rightScoreText);
 
     // overlay
     this.overlayBg = this.add.rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, COLOR_HEX.bg, 0.82); registerUi(this.overlayBg);
-    this.overlayTitle = this.add.text(this.scale.width / 2, this.scale.height / 2 - 70, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize("80px"); registerUi(this.overlayTitle);
+    this.overlayTitle = this.add.text(this.scale.width / 2, this.scale.height / 2 - 70, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize(getResponsiveTextSize(this, "hero")); registerUi(this.overlayTitle);
     this.overlaySubtitle = this.add.text(this.scale.width / 2, this.scale.height / 2 + 10, "", TEXT_PRESETS.body).setOrigin(0.5); registerUi(this.overlaySubtitle);
     this.overlayHint = this.add.text(this.scale.width / 2, this.scale.height / 2 + 60, "", TEXT_PRESETS.hint).setOrigin(0.5); registerUi(this.overlayHint);
 

@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { COLORS, COLOR_HEX, TEXT_PRESETS } from "../theme";
-import { drawDiagonalScanlines, createPulsingDot, addCornerLabel } from "../ui";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, getResponsiveTextSize } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { unlockAudio } from "../audio";
 import { isTouchDevice } from "../input";
@@ -62,7 +62,7 @@ export class MenuScene extends Phaser.Scene {
     this.add
       .text(this.scale.width / 2, 168, "PONG", TEXT_PRESETS.heroOutline)
       .setOrigin(0.5)
-      .setFontSize("96px");
+      .setFontSize(getResponsiveTextSize(this, "hero"));
 
     this.add
       .text(this.scale.width / 2, 232, "rebata, mire, leve o ponto", TEXT_PRESETS.body)
