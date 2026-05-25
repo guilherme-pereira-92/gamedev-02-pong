@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "number": 2,
+  "slug": "02-pong",
+  "title": "Pong",
+  "shortDescription": "Pong com campanha de 5 fases vs CPU, modo treino e 2 jogadores local.",
+  "stack": ["TypeScript", "Phaser 3", "Vite"],
+  "concepts": [
+    "múltiplas cenas (menu + jogo)",
+    "máquina de estados de partida",
+    "colisão AABB manual",
+    "AI rule-based (predição analítica + imperfeição)",
+    "ângulo de rebote por posição de impacto",
+    "campanha de 5 fases com twists (paddles menores, multi-ball, bola intermitente, obstáculo central)",
+    "ball trail + screen shake + partículas"
+  ],
+  "publishedAt": "2026-05-24",
+  "live": "https://guilherme-pereira-92.github.io/gamedev-02-pong/",
+  "repo": "https://github.com/guilherme-pereira-92/gamedev-02-pong",
+  "cover": "screenshots/cover.png",
+  "playable": true,
+  "mobile": "letterbox"
+}
