@@ -16,14 +16,11 @@ async function bootstrap() {
     backgroundColor: COLORS.bg,
     parent: "game",
     scale: {
-      mode: Phaser.Scale.FIT,
-      autoCenter: Phaser.Scale.CENTER_BOTH,
-      width: 800,
-      height: 600,
+      mode: Phaser.Scale.RESIZE,
+      width: "100%",
+      height: "100%",
     },
-    input: {
-      activePointers: 3,
-    },
+    input: { activePointers: 3 },
     scene: [MenuScene, PongScene],
   });
 }

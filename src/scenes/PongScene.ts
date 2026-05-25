@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { COLOR_HEX, TEXT_PRESETS } from "../theme";
-import { drawDiagonalScanlines, createPulsingDot, addCornerLabel } from "../ui";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, setupResponsiveCameras } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { playTone } from "../audio";
 import { isTouchDevice } from "../input";
@@ -85,6 +85,10 @@ export class PongScene extends Phaser.Scene {
   private overlaySubtitle!: Phaser.GameObjects.Text;
   private overlayHint!: Phaser.GameObjects.Text;
 
+  // Dual camera helpers
+  private _registerWorld!: (obj: Phaser.GameObjects.GameObject) => void;
+  private _worldPoint!: (vx: number, vy: number) => { x: number; y: number };
+
   private state: GameState = "serving";
   private serveDirection: 1 | -1 = 1;
 
@@ -120,54 +124,72 @@ export class PongScene extends Phaser.Scene {
   }
 
   create() {
-    this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, COLOR_HEX.bg);
-    drawDiagonalScanlines(this, WIDTH, HEIGHT, 18, 0.04);
+    // Dual camera: gameplay no main cam (800x600 com zoom), chrome no UI cam (viewport)
+    const { registerWorld, registerUi, worldPoint, onResize: onCamResize } = setupResponsiveCameras(this, WIDTH, HEIGHT);
+    this._registerWorld = registerWorld;
+    this._worldPoint = worldPoint;
+
+    // World: bg + scanlines + gameplay
+    const bg = this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, COLOR_HEX.bg); registerWorld(bg);
+    const scanlines = drawDiagonalScanlines(this, WIDTH, HEIGHT, 18, 0.04); registerWorld(scanlines);
     this.drawCenterLine();
 
-    this.trailGraphics = this.add.graphics();
+    this.trailGraphics = this.add.graphics(); registerWorld(this.trailGraphics);
 
-    this.leftPaddle = this.add.rectangle(PADDLE_MARGIN, HEIGHT / 2, PADDLE_W, this.rules.paddleH, COLOR_HEX.fg);
-    this.rightPaddle = this.add.rectangle(WIDTH - PADDLE_MARGIN, HEIGHT / 2, PADDLE_W, this.rules.paddleH, COLOR_HEX.fg);
+    this.leftPaddle = this.add.rectangle(PADDLE_MARGIN, HEIGHT / 2, PADDLE_W, this.rules.paddleH, COLOR_HEX.fg); registerWorld(this.leftPaddle);
+    this.rightPaddle = this.add.rectangle(WIDTH - PADDLE_MARGIN, HEIGHT / 2, PADDLE_W, this.rules.paddleH, COLOR_HEX.fg); registerWorld(this.rightPaddle);
 
     if (this.rules.centerObstacle) {
       this.obstacle = this.add.rectangle(WIDTH / 2, HEIGHT / 2, 16, 100, COLOR_HEX.border);
       this.obstacle.setStrokeStyle(1, COLOR_HEX.muted, 1);
+      registerWorld(this.obstacle);
     }
 
     for (let i = 0; i < this.rules.numBalls; i++) {
       this.spawnBall();
     }
 
-    // chrome
-    addCornerLabel(this, 22, 22, "/ 02", "PONG", false);
-    createPulsingDot(this, WIDTH - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
-    this.add
-      .text(WIDTH - 38, 22, this.statusText(), TEXT_PRESETS.monoLabel)
-      .setOrigin(1, 0);
-    this.add
-      .text(WIDTH - 22, 44, this.metaText(), TEXT_PRESETS.hint)
-      .setOrigin(1, 0);
+    // UI cam: chrome at viewport corners
+    const cornerLabels = addCornerLabel(this, 22, 22, "/ 02", "PONG", false);
+    if (cornerLabels.accentText) registerUi(cornerLabels.accentText);
+    registerUi(cornerLabels.mainText);
 
-    this.add.text(22, HEIGHT - 22, this.bottomLeftChrome(), TEXT_PRESETS.hint).setOrigin(0, 1);
-    this.add.text(WIDTH - 22, HEIGHT - 22, this.controlsHint(), TEXT_PRESETS.hint).setOrigin(1, 1);
+    const dot = createPulsingDot(this, this.scale.width - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
+    registerUi(dot.dot); registerUi(dot.glow);
+
+    const statusLbl = this.add.text(this.scale.width - 38, 22, this.statusText(), TEXT_PRESETS.monoLabel).setOrigin(1, 0); registerUi(statusLbl);
+    const metaLbl = this.add.text(this.scale.width - 22, 44, this.metaText(), TEXT_PRESETS.hint).setOrigin(1, 0); registerUi(metaLbl);
+
+    const bottomLeft = this.add.text(22, this.scale.height - 22, this.bottomLeftChrome(), TEXT_PRESETS.hint).setOrigin(0, 1); registerUi(bottomLeft);
+    const bottomRight = this.add.text(this.scale.width - 22, this.scale.height - 22, this.controlsHint(), TEXT_PRESETS.hint).setOrigin(1, 1); registerUi(bottomRight);
 
     // score grande no topo central
     const scoreStyle = { ...TEXT_PRESETS.heroOutline, fontSize: "72px" };
-    this.leftScoreText = this.add.text(WIDTH / 2 - 60, 50, "0", scoreStyle).setOrigin(1, 0);
-    this.rightScoreText = this.add.text(WIDTH / 2 + 60, 50, "0", scoreStyle).setOrigin(0, 0);
+    this.leftScoreText = this.add.text(this.scale.width / 2 - 60, 50, "0", scoreStyle).setOrigin(1, 0); registerUi(this.leftScoreText);
+    this.rightScoreText = this.add.text(this.scale.width / 2 + 60, 50, "0", scoreStyle).setOrigin(0, 0); registerUi(this.rightScoreText);
 
     // overlay
-    this.overlayBg = this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, COLOR_HEX.bg, 0.82);
-    this.overlayTitle = this.add
-      .text(WIDTH / 2, HEIGHT / 2 - 70, "", TEXT_PRESETS.heroOutline)
-      .setOrigin(0.5)
-      .setFontSize("80px");
-    this.overlaySubtitle = this.add
-      .text(WIDTH / 2, HEIGHT / 2 + 10, "", TEXT_PRESETS.body)
-      .setOrigin(0.5);
-    this.overlayHint = this.add
-      .text(WIDTH / 2, HEIGHT / 2 + 60, "", TEXT_PRESETS.hint)
-      .setOrigin(0.5);
+    this.overlayBg = this.add.rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, COLOR_HEX.bg, 0.82); registerUi(this.overlayBg);
+    this.overlayTitle = this.add.text(this.scale.width / 2, this.scale.height / 2 - 70, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize("80px"); registerUi(this.overlayTitle);
+    this.overlaySubtitle = this.add.text(this.scale.width / 2, this.scale.height / 2 + 10, "", TEXT_PRESETS.body).setOrigin(0.5); registerUi(this.overlaySubtitle);
+    this.overlayHint = this.add.text(this.scale.width / 2, this.scale.height / 2 + 60, "", TEXT_PRESETS.hint).setOrigin(0.5); registerUi(this.overlayHint);
+
+    onCamResize(() => {
+      const W = this.scale.width;
+      const H = this.scale.height;
+      dot.dot.setPosition(W - 22 - 4, 22 + 6);
+      dot.glow.setPosition(W - 22 - 4, 22 + 6);
+      statusLbl.setPosition(W - 38, 22);
+      metaLbl.setPosition(W - 22, 44);
+      bottomLeft.setPosition(22, H - 22);
+      bottomRight.setPosition(W - 22, H - 22);
+      this.leftScoreText.setPosition(W / 2 - 60, 50);
+      this.rightScoreText.setPosition(W / 2 + 60, 50);
+      this.overlayBg.setPosition(W / 2, H / 2).setSize(W, H);
+      this.overlayTitle.setPosition(W / 2, H / 2 - 70);
+      this.overlaySubtitle.setPosition(W / 2, H / 2 + 10);
+      this.overlayHint.setPosition(W / 2, H / 2 + 60);
+    });
 
     const kb = this.input.keyboard!;
     this.keys = {
@@ -201,8 +223,10 @@ export class PongScene extends Phaser.Scene {
 
   private handlePointerMove(pointer: Phaser.Input.Pointer) {
     const half = this.rules.paddleH / 2;
-    const clampedY = Phaser.Math.Clamp(pointer.y, half, HEIGHT - half);
-    if (pointer.x < WIDTH / 2) {
+    // Pointer está em coords do viewport — converte pra coords do mundo (800x600 lógico)
+    const world = this._worldPoint(pointer.x, pointer.y);
+    const clampedY = Phaser.Math.Clamp(world.y, half, HEIGHT - half);
+    if (world.x < WIDTH / 2) {
       this.leftPaddle.y = clampedY;
     } else if (this.mode === "twoplayer") {
       this.rightPaddle.y = clampedY;
@@ -211,6 +235,7 @@ export class PongScene extends Phaser.Scene {
 
   private drawCenterLine() {
     const g = this.add.graphics();
+    this._registerWorld(g);
     g.fillStyle(COLOR_HEX.border, 0.7);
     for (let y = 12; y < HEIGHT - 12; y += 16) {
       g.fillRect(WIDTH / 2 - 1, y, 2, 8);
@@ -247,6 +272,7 @@ export class PongScene extends Phaser.Scene {
 
   private spawnBall() {
     const rect = this.add.rectangle(WIDTH / 2, HEIGHT / 2, BALL_SIZE, BALL_SIZE, COLOR_HEX.accent);
+    this._registerWorld(rect);
     this.balls.push({ rect, vx: 0, vy: 0, speed: BALL_SPEED_START, trail: [], visible: true });
   }
 
